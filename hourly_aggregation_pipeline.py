@@ -2,7 +2,7 @@
 Monotonic Hourly Aggregation Pipeline (Partial Hours Allowed)
 ------------------------------------------------------------
 Rules:
-- Source of truth: ai_metrics_5m_v2
+- Source of truth: ai_metrics_5m
 - Only the latest in-flight hour is protected
 - All older hours are aggregated even if incomplete
 - No lookbacks, no gap scans
@@ -16,6 +16,8 @@ Batch Processing:
 """
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import json
 import uuid
 import time
@@ -27,10 +29,10 @@ import logging
 # ---------------------------------------------------------------------
 # CLICKHOUSE CONFIG
 # ---------------------------------------------------------------------
-CH_HOST = "ec2-47-129-241-41.ap-southeast-1.compute.amazonaws.com"
-CH_PORT = 8123
-CH_USERNAME = "wm_test"
-CH_PASSWORD = "Watermelon@123"
+CH_HOST = "wmsandbox5-clickhouse.watermelon.us"
+CH_PORT = 443
+CH_USERNAME = "admin"
+CH_PASSWORD = "W@terlem0n@123#"
 CH_DATABASE = "metrics"
 CH_STATE_TABLE = "hourly_pipeline_state"
 
@@ -49,18 +51,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 class ClickHouseClient:
     def __init__(self, host, port, username, password, database):
-        self.base_url = f"http://{host}:{port}"
+        self.base_url = f"https://{host}:{port}"
         self.auth = (username, password)
         self.database = database
 
     def execute(self, query: str) -> str:
-        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300)
+        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300, verify=False)
         r.raise_for_status()
         return r.text.strip()
 
     def execute_json(self, query: str) -> list:
         query = query.rstrip(";") + " FORMAT JSONEachRow"
-        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300)
+        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300, verify=False)
         r.raise_for_status()
         if not r.text.strip():
             return []
@@ -165,7 +167,7 @@ class HourlyAggregationPipeline:
     def get_latest_safe_hour_from_5min(self) -> Optional[datetime]:
         query = f"""
         SELECT toStartOfHour(max(ts)) - INTERVAL 1 HOUR AS hour
-        FROM {self.client.database}.ai_metrics_5m_v2
+        FROM {self.client.database}.ai_metrics_5m
         """
         rows = self.client.execute_json(query)
         return ch_datetime(rows[0].get("hour")) if rows else None
@@ -186,7 +188,7 @@ class HourlyAggregationPipeline:
     def get_earliest_hour_from_5min(self) -> Optional[datetime]:
         query = f"""
         SELECT min(toStartOfHour(ts)) AS hour
-        FROM {self.client.database}.ai_metrics_5m_v2
+        FROM {self.client.database}.ai_metrics_5m
         """
         rows = self.client.execute_json(query)
         return ch_datetime(rows[0].get("hour")) if rows else None
@@ -226,7 +228,7 @@ class HourlyAggregationPipeline:
             quantile(0.75)(success_rate),
 
             now()
-        FROM {self.client.database}.ai_metrics_5m_v2
+        FROM {self.client.database}.ai_metrics_5m
         WHERE ts >= '{start:%Y-%m-%d %H:%M:%S}'
           AND ts <  '{end:%Y-%m-%d %H:%M:%S}'
         GROUP BY application_id, service_id, project_id, service, toStartOfHour(ts)
@@ -265,7 +267,7 @@ class HourlyAggregationPipeline:
             quantile(0.75)(response_success_rate),
 
             now()
-        FROM {self.client.database}.ai_metrics_5m_v2
+        FROM {self.client.database}.ai_metrics_5m
         WHERE ts >= '{start:%Y-%m-%d %H:%M:%S}'
           AND ts <  '{end:%Y-%m-%d %H:%M:%S}'
         GROUP BY application_id, service_id, project_id, service, toStartOfHour(ts)
