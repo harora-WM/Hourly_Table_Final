@@ -33,4 +33,4 @@ Every run writes one row to `metrics.hourly_pipeline_state` with status (`succes
 
 ## Configuration
 
-Credentials and host are set at the top of `hourly_aggregation_pipeline.py` (lines 29-34). Update before deploying to a new environment.
+Credentials and host are set at the top of `hourly_aggregation_pipeline.py` (lines 32-36). Update before deploying to a new environment.

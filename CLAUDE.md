@@ -9,7 +9,9 @@ A single-file ClickHouse hourly aggregation pipeline (`hourly_aggregation_pipeli
 ## Running the Pipeline
 
 ```bash
-pip3 install -r requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 python3 hourly_aggregation_pipeline.py
 ```
 
@@ -43,25 +45,34 @@ The script runs immediately on start, then schedules itself to re-run every hour
 - Each row records: `run_id`, `started_at`, `finished_at`, `status`, `source_latest_safe_hour`, `last_processed_hour_before_run`, `first_hour_processed`, `last_hour_processed`, `total_hours_processed`, `batch_mode`, `batch_count`, `duration_seconds`. Status values: `noop` (no source data at all), `up_to_date` (already caught up), `success` (hours processed).
 
 **DateTime Handling**
-- `ch_datetime()` (lines 72-88) handles ClickHouse DateTime values that may be returned as integers (Unix timestamps) or ISO strings over HTTP JSON — always use this when parsing timestamp fields from query results
+- `ch_datetime()` handles ClickHouse DateTime values that may be returned as integers (Unix timestamps) or ISO strings over HTTP JSON — always use this when parsing timestamp fields from query results
+
+**First-Run Bootstrap**
+- `get_earliest_hour_from_5min()` returns the oldest hour in the source table and is used as `start_hour` when there is no prior hourly data. On subsequent runs, `start_hour` is `last_hourly + 1 hour`.
+
+**Table Auto-Creation**
+- `ensure_hourly_table()` and `ensure_state_table()` are called at the top of every `run()` invocation (`CREATE TABLE IF NOT EXISTS`). They are safe to re-run and add no overhead once tables exist.
+
+**Fault Tolerance**
+- The `job()` wrapper at the entry point catches all exceptions and logs them without re-raising, so the `schedule` loop keeps running even after a failed run. A 30-second sleep polls the scheduler between runs.
 
 ## Critical Code Sections
 
 **Never modify:**
-- Lines 72-88: `ch_datetime()` — handles both int and string timestamp formats from ClickHouse HTTP API
-- Lines 156-162: `get_latest_safe_hour_from_5min()` — protects the in-flight hour
-- Lines 164-175: `get_latest_hourly_hour()` — enforces the two-metric invariant with `COUNT(DISTINCT metric) = 2`
+- `ch_datetime()` — handles both int and string timestamp formats from ClickHouse HTTP API
+- `get_latest_safe_hour_from_5min()` — protects the in-flight hour
+- `get_latest_hourly_hour()` — enforces the two-metric invariant with `COUNT(DISTINCT metric) = 2`
 - GROUP BY clauses in aggregation queries — ensures per-hour separation even in batch mode
 
 **Safe to modify:**
-- Batch size (currently 24 hours, line 331 — `timedelta(hours=24)`)
-- Batch threshold (currently 24 hours, line 323 — `if total_hours >= 24`)
-- `CH_STATE_TABLE` name (line 34)
-- Database credentials (lines 29-33) — consider moving to environment variables
+- Batch size: `timedelta(hours=24)` in the `hours_remaining >= 24` branch of `run()`
+- Batch threshold: `if total_hours >= 24` in `run()`
+- `CH_STATE_TABLE` constant at the top of the file
+- Database credentials (`CH_HOST`, `CH_PORT`, `CH_USERNAME`, `CH_PASSWORD`, `CH_DATABASE`) at the top of the file — consider moving to environment variables
 
 ## Database Schema
 
-**Source:** `metrics.ai_metrics_5m_v2` — 5-min windows. Fields used by the pipeline: `success_rate`, `success_target`, `response_success_rate`, `response_target_percent`, `total_count`, `response_breach_count`, `sum_response_time`, `p90_latency`. Additional fields present but not yet used: `application_name`, `project_id`, `success_count`, `error_count`, `error_rate`, `response_slo_seconds`, `avg_latency`, `p80_latency`, `p95_latency`, `burn_rate`, `eb_health`, `response_health`, `region`, `deploy_version`, `ingestion_time`, `processed_window`
+**Source:** `metrics.ai_metrics_5m_v2` — 5-min windows. Fields used by the pipeline: `success_rate`, `success_target`, `response_success_rate`, `response_target_percent`, `total_count`, `response_breach_count`, `sum_response_time`, `p90_latency`, `project_id`. Additional fields present but not yet used: `application_name`, `success_count`, `error_count`, `error_rate`, `response_slo_seconds`, `avg_latency`, `p80_latency`, `p95_latency`, `burn_rate`, `eb_health`, `response_health`, `region`, `deploy_version`, `ingestion_time`, `processed_window`
 
 **Target:** `metrics.ai_service_features_hourly` — `ReplacingMergeTree(updated_at)`, ordered by `(application_id, service_id, service, metric, ts_hour)`, partitioned by `toYYYYMM(ts_hour)`. Includes `project_id Int64` sourced from `ai_metrics_5m_v2`.
 
@@ -70,3 +81,18 @@ Each hour produces two independent rows: one with `metric='success_rate'` and on
 ## Idempotency
 
 `ReplacingMergeTree(updated_at)` ensures safe reprocessing — multiple concurrent runs will not create duplicates. Pipeline always starts from `last_completed_hour + 1`.
+
+## ClickHouseClient Implementation Details
+
+- Uses raw **HTTPS** (`requests.post`) on port 443 — **no ClickHouse driver installed**. `requirements.txt` only has `requests` and `schedule`.
+- SSL certificate verification is disabled (`verify=False`) with `urllib3` warnings suppressed — the host uses a private cert that can't be verified against system CA roots.
+- `execute(query)` — fire-and-forget; returns raw text.
+- `execute_json(query)` — automatically appends `FORMAT JSONEachRow` before sending, then parses each response line as JSON. Never add `FORMAT` yourself when calling `execute_json`.
+- HTTP timeout is **300 seconds** per request. For very large batch sizes this may need increasing.
+- `_save_state` uses Python f-string interpolation (not parameterized queries) — acceptable here since all values are internal pipeline state, never user input.
+- **State dict key naming quirk**: the Python dict uses `"last_processed_before_run"` but the DB column is `last_processed_hour_before_run`. Both sides of `_save_state` are consistent with their own naming — don't "fix" the mismatch without updating both.
+- **Credentials**: `CH_HOST`, `CH_USERNAME`, `CH_PASSWORD` at the top of `hourly_aggregation_pipeline.py` are real production values. Do not log, print, or copy them into other files.
+
+## No Test Suite
+
+There are no tests, no linting config, and no CI in this repo. The pipeline is verified by observing `hourly_pipeline_state` audit rows and querying `ai_service_features_hourly` directly.

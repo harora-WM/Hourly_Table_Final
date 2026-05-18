@@ -16,6 +16,8 @@ Batch Processing:
 """
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import json
 import uuid
 import time
@@ -28,7 +30,7 @@ import logging
 # CLICKHOUSE CONFIG
 # ---------------------------------------------------------------------
 CH_HOST = "ec2-47-129-241-41.ap-southeast-1.compute.amazonaws.com"
-CH_PORT = 8123
+CH_PORT = 443
 CH_USERNAME = "wm_test"
 CH_PASSWORD = "Watermelon@123"
 CH_DATABASE = "metrics"
@@ -49,18 +51,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------
 class ClickHouseClient:
     def __init__(self, host, port, username, password, database):
-        self.base_url = f"http://{host}:{port}"
+        self.base_url = f"https://{host}:{port}"
         self.auth = (username, password)
         self.database = database
 
     def execute(self, query: str) -> str:
-        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300)
+        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300, verify=False)
         r.raise_for_status()
         return r.text.strip()
 
     def execute_json(self, query: str) -> list:
         query = query.rstrip(";") + " FORMAT JSONEachRow"
-        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300)
+        r = requests.post(self.base_url, auth=self.auth, data=query, timeout=300, verify=False)
         r.raise_for_status()
         if not r.text.strip():
             return []
