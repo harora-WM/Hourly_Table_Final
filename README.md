@@ -1,6 +1,6 @@
 # Hourly_Table_Final
 
-Hourly aggregation pipeline that reads 5-minute granularity data from `metrics.ai_metrics_5m_v2` and aggregates it into `metrics.ai_service_features_hourly` in ClickHouse.
+Hourly aggregation pipeline that reads 5-minute granularity data from `metrics.ai_metrics_5m` and aggregates it into `metrics.ai_service_features_hourly` in ClickHouse.
 
 ## Setup
 
@@ -20,7 +20,7 @@ Runs immediately on start, then automatically re-runs every hour at `:25` (uses 
 
 ## How it works
 
-- Reads from `ai_metrics_5m_v2` (5-min windows) and writes to `ai_service_features_hourly`
+- Reads from `ai_metrics_5m` (5-min windows) and writes to `ai_service_features_hourly`
 - Each hour produces 2 rows: one for `metric='success_rate'` and one for `metric='latency'`
 - Only the latest in-flight hour is protected — all older hours are aggregated even if incomplete
 - For gaps < 24 hours: processes one hour at a time
