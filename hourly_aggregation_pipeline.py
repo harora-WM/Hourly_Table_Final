@@ -107,7 +107,7 @@ class HourlyAggregationPipeline:
         CREATE TABLE IF NOT EXISTS {self.client.database}.ai_service_features_hourly (
             application_id UInt32,
             service_id UInt64,
-            project_id Int64,
+            project_id UInt64,
             service String,
             metric String,
             ts_hour DateTime,
@@ -136,7 +136,7 @@ class HourlyAggregationPipeline:
         )
         ENGINE = ReplacingMergeTree(updated_at)
         PARTITION BY toYYYYMM(ts_hour)
-        ORDER BY (application_id, service_id, service, metric, ts_hour)
+        ORDER BY (application_id, service_id, project_id, service, metric, ts_hour)
         """
         self.client.execute(query)
 
