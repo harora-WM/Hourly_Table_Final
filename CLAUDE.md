@@ -73,7 +73,7 @@ The script runs immediately on start, then schedules itself to re-run every hour
 
 ## Database Schema
 
-**Source:** `metrics.ai_metrics_5m` — 5-min windows. Fields used by the pipeline: `application_id`, `service_id`, `project_id`, `service`, `ts` (grouping/filtering), `success_rate`, `success_target`, `response_success_rate`, `response_target_percent`, `total_count`, `response_breach_count`, `sum_response_time`, `p90_latency`. Additional fields present but not yet used: `application_name`, `success_count`, `error_count`, `error_rate`, `response_slo_seconds`, `avg_latency`, `p80_latency`, `p95_latency`, `burn_rate`, `eb_health`, `response_health`, `region`, `deploy_version`, `ingestion_time`, `processed_window`
+**Source:** `metrics.ai_metrics_5m` — 5-min windows. Fields used by the pipeline: `application_id`, `service_id`, `project_id`, `service`, `ts` (grouping/filtering), `success_rate`, `success_target`, `response_success_rate`, `response_target_percent`, `total_count`, `response_breach_count`, `sum_response_time`, `p90_latency`. Additional fields present but not yet used: `application_name`, `success_count`, `error_count`, `error_rate`, `response_slo_seconds`, `avg_latency`, `p80_latency`, `p95_latency`, `burn_rate`, `eb_health`, `response_health`, `region`, `deploy_version`, `ingestion_time`, `day_of_week`, `week_of_month`, `hour`, `minute_bucket`
 
 **Target:** `metrics.ai_service_features_hourly` — `ReplacingMergeTree(updated_at)`, ordered by `(application_id, service_id, project_id, service, metric, ts_hour)`, partitioned by `toYYYYMM(ts_hour)`. Includes `project_id UInt64` matching the source type in `ai_metrics_5m`.
 
