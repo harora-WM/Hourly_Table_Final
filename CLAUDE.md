@@ -15,11 +15,11 @@ pip install -r requirements.txt
 python3 hourly_aggregation_pipeline.py
 ```
 
-The script runs immediately on start, then schedules itself to re-run every hour at `:25` using the `schedule` library — no external cron needed. It runs until the process is killed. Scheduling uses **local system time**.
+The script runs immediately on start, then schedules itself to re-run every hour at `:30` using the `schedule` library — no external cron needed. It runs until the process is killed. Scheduling uses **local system time**.
 
 **Legacy cron (if running outside a container):**
 ```bash
-25 * * * * cd /path/to/script && python3 hourly_aggregation_pipeline.py >> /var/log/hourly_aggregation/cron.log 2>&1
+30 * * * * cd /path/to/script && python3 hourly_aggregation_pipeline.py >> /var/log/hourly_aggregation/cron.log 2>&1
 ```
 
 ## Key Architecture Principles
@@ -57,6 +57,10 @@ The script runs immediately on start, then schedules itself to re-run every hour
 **Fault Tolerance**
 - The `job()` wrapper at the entry point catches all exceptions and logs them without re-raising, so the `schedule` loop keeps running even after a failed run. A 30-second sleep polls the scheduler between runs.
 
+**Source Deduplication (ReplacingMergeTree)**
+- `ai_metrics_5m` is `ReplacingMergeTree(ingestion_time)` — a late correction to a 5-min window inserts a second row under the same `(application_id, project_id, service_id, ts)` key rather than updating in place. ClickHouse only collapses these duplicates on background merge, or immediately with `FINAL`.
+- `aggregate_success_rate()` and `aggregate_latency()` therefore read `FROM ai_metrics_5m FINAL`. Without `FINAL`, any not-yet-merged duplicate rows get double-counted into `SUM`/`AVG`/`COUNT`, inflating `total_requests` and `response_breach_count` — measured at ~0.9–1.3% before this was added. `FINAL` forces an on-the-fly merge at query time, so it's slower than a plain scan; watch this on very large batch backfills.
+
 ## Critical Code Sections
 
 **Never modify:**
@@ -64,6 +68,7 @@ The script runs immediately on start, then schedules itself to re-run every hour
 - `get_latest_safe_hour_from_5min()` — protects the in-flight hour
 - `get_latest_hourly_hour()` — enforces the two-metric invariant with `COUNT(DISTINCT metric) = 2`
 - GROUP BY clauses in aggregation queries — ensures per-hour separation even in batch mode
+- `FINAL` on the `ai_metrics_5m` reads in `aggregate_success_rate()`/`aggregate_latency()` — removing it reintroduces duplicate-counting from un-merged `ReplacingMergeTree` rows (see Source Deduplication above)
 
 **Safe to modify:**
 - Batch size: `timedelta(hours=24)` in the `hours_remaining >= 24` branch of `run()`
@@ -73,7 +78,7 @@ The script runs immediately on start, then schedules itself to re-run every hour
 
 ## Database Schema
 
-**Source:** `metrics.ai_metrics_5m` — 5-min windows. Fields used by the pipeline: `application_id`, `service_id`, `project_id`, `service`, `ts` (grouping/filtering), `success_rate`, `success_target`, `response_success_rate`, `response_target_percent`, `total_count`, `response_breach_count`, `sum_response_time`, `p90_latency`. Additional fields present but not yet used: `application_name`, `success_count`, `error_count`, `error_rate`, `response_slo_seconds`, `avg_latency`, `p80_latency`, `p95_latency`, `burn_rate`, `eb_health`, `response_health`, `region`, `deploy_version`, `ingestion_time`, `processed_window`
+**Source:** `metrics.ai_metrics_5m` — `ReplacingMergeTree(ingestion_time)`, 5-min windows. Fields used by the pipeline: `application_id`, `service_id`, `project_id`, `service`, `ts` (grouping/filtering), `success_rate`, `success_target`, `response_success_rate`, `response_target_percent`, `total_count`, `response_breach_count`, `sum_response_time`, `p90_latency`. Additional fields present but not yet used: `application_name`, `success_count`, `error_count`, `error_rate`, `response_slo_seconds`, `avg_latency`, `p80_latency`, `p95_latency`, `burn_rate`, `eb_health`, `response_health`, `region`, `deploy_version`, `ingestion_time`, `day_of_week`, `week_of_month`, `hour`, `minute_bucket`
 
 **Target:** `metrics.ai_service_features_hourly` — `ReplacingMergeTree(updated_at)`, ordered by `(application_id, service_id, project_id, service, metric, ts_hour)`, partitioned by `toYYYYMM(ts_hour)`. Includes `project_id UInt64` matching the source type in `ai_metrics_5m`.
 

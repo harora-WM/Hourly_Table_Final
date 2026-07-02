@@ -228,7 +228,7 @@ class HourlyAggregationPipeline:
             quantile(0.75)(success_rate),
 
             now()
-        FROM {self.client.database}.ai_metrics_5m
+        FROM {self.client.database}.ai_metrics_5m FINAL
         WHERE ts >= '{start:%Y-%m-%d %H:%M:%S}'
           AND ts <  '{end:%Y-%m-%d %H:%M:%S}'
         GROUP BY application_id, service_id, project_id, service, toStartOfHour(ts)
@@ -267,7 +267,7 @@ class HourlyAggregationPipeline:
             quantile(0.75)(response_success_rate),
 
             now()
-        FROM {self.client.database}.ai_metrics_5m
+        FROM {self.client.database}.ai_metrics_5m FINAL
         WHERE ts >= '{start:%Y-%m-%d %H:%M:%S}'
           AND ts <  '{end:%Y-%m-%d %H:%M:%S}'
         GROUP BY application_id, service_id, project_id, service, toStartOfHour(ts)
@@ -414,9 +414,9 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"Pipeline failed: {e}")
 
-    # Run immediately on start, then every hour at :25
+    # Run immediately on start, then every hour at :30
     job()
-    schedule.every().hour.at(":25").do(job)
+    schedule.every().hour.at(":30").do(job)
 
     while True:
         schedule.run_pending()
