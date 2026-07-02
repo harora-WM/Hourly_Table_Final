@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-A single-file ClickHouse hourly aggregation pipeline (`hourly_aggregation_pipeline.py`) that reads 5-minute granularity data from `ai_metrics_5m` and aggregates it into `ai_service_features_hourly`.
+A ClickHouse hourly aggregation pipeline that reads 5-minute granularity data from `ai_metrics_5m` and aggregates it into `ai_service_features_hourly`. There are **two files with this same logic** — see "Two Pipeline Files" below before editing either one.
+
+## Two Pipeline Files (read before editing)
+
+- **`hourly_aggregation_pipeline.py`** — the original standalone script. Runs its own `schedule` loop directly.
+- **`hourly_pipeline.py`** — near-identical copy, restructured to be importable: a lazy `get_pipeline()` singleton and a `run_hourly_job()` entrypoint, so it can be imported by a shared `scheduler.py` process (not present in this repo — only discussed alongside a `producer_opensearch.py` script that also isn't in this repo). Still runnable standalone too.
+
+Both files currently point at the **same production tables** via the same `.env` (see Configuration). This is a known, unresolved duplication — every fix to `ch_datetime()`, the aggregation SQL, the batch logic, or the two-metric invariant must currently be applied to **both files** or they will silently drift apart. If you're asked to change core pipeline logic and only one of these files is mentioned, check whether the other needs the same change too. Nothing currently prevents both from being scheduled and run at once (harmless due to `ReplacingMergeTree` dedup, but wasteful and confusing).
 
 ## Running the Pipeline
 
@@ -12,7 +19,7 @@ A single-file ClickHouse hourly aggregation pipeline (`hourly_aggregation_pipeli
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python3 hourly_aggregation_pipeline.py
+python3 hourly_aggregation_pipeline.py   # or: python3 hourly_pipeline.py
 ```
 
 The script runs immediately on start, then schedules itself to re-run every hour at `:30` using the `schedule` library — no external cron needed. It runs until the process is killed. Scheduling uses **local system time**.
@@ -79,7 +86,7 @@ The script runs immediately on start, then schedules itself to re-run every hour
 
 All ClickHouse connection details and table names are loaded from a `.env` file in the script's directory via `python-dotenv` (`load_dotenv(..., override=True)`), read into module-level constants at import time: `CH_HOST`, `CH_PORT`, `CH_USERNAME`, `CH_PASSWORD`, `CH_DATABASE`, `CH_DATA_TABLE` (5-min source), `CH_HOURLY_TABLE` (rollup target), `CH_STATE_TABLE` (audit table). All are required env vars (`os.environ[...]`, no defaults) — missing any of them crashes on import with a `KeyError`.
 
-The env var names intentionally match `producer_opensearch.py`'s `.env` (`CLICKHOUSE_HOST`, `CLICKHOUSE_PORT`, `CLICKHOUSE_USERNAME`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_DATA_TABLE`) so both scripts can share one `.env` file or one set of pod-injected env vars when deployed together — `CLICKHOUSE_DATA_TABLE` in particular refers to the exact same physical table (`ai_metrics_5m`) in both scripts. `CLICKHOUSE_HOURLY_TABLE` and `CLICKHOUSE_STATE_TABLE` are unique to this pipeline.
+The env var names intentionally match a separate `producer_opensearch.py` script's `.env` convention (`CLICKHOUSE_HOST`, `CLICKHOUSE_PORT`, `CLICKHOUSE_USERNAME`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_DATA_TABLE`) — that script is **not part of this repo**, it was designed to run alongside this pipeline in the same pod and feed `ai_metrics_5m` (referenced here as background context only). `CLICKHOUSE_DATA_TABLE` refers to that same physical table (`ai_metrics_5m`). `CLICKHOUSE_HOURLY_TABLE` and `CLICKHOUSE_STATE_TABLE` are unique to this pipeline.
 
 `.env` is gitignored — never commit it. `override=True` means `.env` values win over any pre-existing OS/pod env vars of the same name; if this script is ever containerized, make sure `.env` isn't baked into the image (add it to `.dockerignore` too) and prefer injecting real values via a K8s Secret rather than shipping a `.env` file.
 
