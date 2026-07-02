@@ -19,6 +19,7 @@ import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 import json
+import os
 import uuid
 import time
 import schedule
@@ -26,15 +27,26 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import logging
 
+from dotenv import load_dotenv
+
 # ---------------------------------------------------------------------
 # CLICKHOUSE CONFIG
 # ---------------------------------------------------------------------
-CH_HOST = "wmsandbox5-clickhouse.watermelon.us"
-CH_PORT = 443
-CH_USERNAME = "admin"
-CH_PASSWORD = "W@terlem0n@123#"
-CH_DATABASE = "metrics"
-CH_STATE_TABLE = "hourly_pipeline_state"
+# Same var names as producer_opensearch.py's .env, so both scripts can
+# share one .env / one set of pod-injected env vars.
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_BASE_DIR, ".env"), override=True)
+
+CH_HOST = os.environ["CLICKHOUSE_HOST"]
+CH_PORT = int(os.environ["CLICKHOUSE_PORT"])
+CH_USERNAME = os.environ["CLICKHOUSE_USERNAME"]
+CH_PASSWORD = os.environ["CLICKHOUSE_PASSWORD"]
+CH_DATABASE = os.environ["CLICKHOUSE_DATABASE"]
+# CLICKHOUSE_DATA_TABLE is the same var name producer_opensearch.py uses for
+# this same table (the 5-min source), so both scripts stay in sync via .env.
+CH_DATA_TABLE = os.environ["CLICKHOUSE_DATA_TABLE"]
+CH_HOURLY_TABLE = os.environ["CLICKHOUSE_HOURLY_TABLE"]
+CH_STATE_TABLE = os.environ["CLICKHOUSE_STATE_TABLE"]
 
 # ---------------------------------------------------------------------
 # Logging
@@ -104,7 +116,7 @@ class HourlyAggregationPipeline:
     # ---------------------------------------------------------------
     def ensure_hourly_table(self):
         query = f"""
-        CREATE TABLE IF NOT EXISTS {self.client.database}.ai_service_features_hourly (
+        CREATE TABLE IF NOT EXISTS {self.client.database}.{CH_HOURLY_TABLE} (
             application_id UInt32,
             service_id UInt64,
             project_id UInt64,
@@ -167,7 +179,7 @@ class HourlyAggregationPipeline:
     def get_latest_safe_hour_from_5min(self) -> Optional[datetime]:
         query = f"""
         SELECT toStartOfHour(max(ts)) - INTERVAL 1 HOUR AS hour
-        FROM {self.client.database}.ai_metrics_5m
+        FROM {self.client.database}.{CH_DATA_TABLE}
         """
         rows = self.client.execute_json(query)
         return ch_datetime(rows[0].get("hour")) if rows else None
@@ -177,7 +189,7 @@ class HourlyAggregationPipeline:
         SELECT max(ts_hour) AS hour
         FROM (
             SELECT ts_hour
-            FROM {self.client.database}.ai_service_features_hourly
+            FROM {self.client.database}.{CH_HOURLY_TABLE}
             GROUP BY ts_hour
             HAVING COUNT(DISTINCT metric) = 2
         )
@@ -188,7 +200,7 @@ class HourlyAggregationPipeline:
     def get_earliest_hour_from_5min(self) -> Optional[datetime]:
         query = f"""
         SELECT min(toStartOfHour(ts)) AS hour
-        FROM {self.client.database}.ai_metrics_5m
+        FROM {self.client.database}.{CH_DATA_TABLE}
         """
         rows = self.client.execute_json(query)
         return ch_datetime(rows[0].get("hour")) if rows else None
@@ -198,7 +210,7 @@ class HourlyAggregationPipeline:
     # ---------------------------------------------------------------
     def aggregate_success_rate(self, start: datetime, end: datetime):
         query = f"""
-        INSERT INTO {self.client.database}.ai_service_features_hourly
+        INSERT INTO {self.client.database}.{CH_HOURLY_TABLE}
         SELECT
             application_id,
             service_id,
@@ -228,7 +240,7 @@ class HourlyAggregationPipeline:
             quantile(0.75)(success_rate),
 
             now()
-        FROM {self.client.database}.ai_metrics_5m FINAL
+        FROM {self.client.database}.{CH_DATA_TABLE} FINAL
         WHERE ts >= '{start:%Y-%m-%d %H:%M:%S}'
           AND ts <  '{end:%Y-%m-%d %H:%M:%S}'
         GROUP BY application_id, service_id, project_id, service, toStartOfHour(ts)
@@ -237,7 +249,7 @@ class HourlyAggregationPipeline:
 
     def aggregate_latency(self, start: datetime, end: datetime):
         query = f"""
-        INSERT INTO {self.client.database}.ai_service_features_hourly
+        INSERT INTO {self.client.database}.{CH_HOURLY_TABLE}
         SELECT
             application_id,
             service_id,
@@ -267,7 +279,7 @@ class HourlyAggregationPipeline:
             quantile(0.75)(response_success_rate),
 
             now()
-        FROM {self.client.database}.ai_metrics_5m FINAL
+        FROM {self.client.database}.{CH_DATA_TABLE} FINAL
         WHERE ts >= '{start:%Y-%m-%d %H:%M:%S}'
           AND ts <  '{end:%Y-%m-%d %H:%M:%S}'
         GROUP BY application_id, service_id, project_id, service, toStartOfHour(ts)

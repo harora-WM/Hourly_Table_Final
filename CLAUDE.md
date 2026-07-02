@@ -73,8 +73,15 @@ The script runs immediately on start, then schedules itself to re-run every hour
 **Safe to modify:**
 - Batch size: `timedelta(hours=24)` in the `hours_remaining >= 24` branch of `run()`
 - Batch threshold: `if total_hours >= 24` in `run()`
-- `CH_STATE_TABLE` constant at the top of the file
-- Database credentials (`CH_HOST`, `CH_PORT`, `CH_USERNAME`, `CH_PASSWORD`, `CH_DATABASE`) at the top of the file — consider moving to environment variables
+- `.env` values (see Configuration below) — never hardcode credentials or table names back into the `.py` file
+
+## Configuration
+
+All ClickHouse connection details and table names are loaded from a `.env` file in the script's directory via `python-dotenv` (`load_dotenv(..., override=True)`), read into module-level constants at import time: `CH_HOST`, `CH_PORT`, `CH_USERNAME`, `CH_PASSWORD`, `CH_DATABASE`, `CH_DATA_TABLE` (5-min source), `CH_HOURLY_TABLE` (rollup target), `CH_STATE_TABLE` (audit table). All are required env vars (`os.environ[...]`, no defaults) — missing any of them crashes on import with a `KeyError`.
+
+The env var names intentionally match `producer_opensearch.py`'s `.env` (`CLICKHOUSE_HOST`, `CLICKHOUSE_PORT`, `CLICKHOUSE_USERNAME`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_DATA_TABLE`) so both scripts can share one `.env` file or one set of pod-injected env vars when deployed together — `CLICKHOUSE_DATA_TABLE` in particular refers to the exact same physical table (`ai_metrics_5m`) in both scripts. `CLICKHOUSE_HOURLY_TABLE` and `CLICKHOUSE_STATE_TABLE` are unique to this pipeline.
+
+`.env` is gitignored — never commit it. `override=True` means `.env` values win over any pre-existing OS/pod env vars of the same name; if this script is ever containerized, make sure `.env` isn't baked into the image (add it to `.dockerignore` too) and prefer injecting real values via a K8s Secret rather than shipping a `.env` file.
 
 ## Database Schema
 
@@ -97,7 +104,7 @@ Each hour produces two independent rows: one with `metric='success_rate'` and on
 - HTTP timeout is **300 seconds** per request. For very large batch sizes this may need increasing.
 - `_save_state` uses Python f-string interpolation (not parameterized queries) — acceptable here since all values are internal pipeline state, never user input.
 - **State dict key naming quirk**: the Python dict uses `"last_processed_before_run"` but the DB column is `last_processed_hour_before_run`. Both sides of `_save_state` are consistent with their own naming — don't "fix" the mismatch without updating both.
-- **Credentials**: `CH_HOST`, `CH_USERNAME`, `CH_PASSWORD` at the top of `hourly_aggregation_pipeline.py` are real production values. Do not log, print, or copy them into other files.
+- **Credentials**: `CH_HOST`, `CH_USERNAME`, `CH_PASSWORD` (loaded from `.env`, see Configuration above) are real production values. Do not log, print, or copy them into other files, and don't hardcode them back into the `.py` file.
 
 ## Verifying Runs
 
